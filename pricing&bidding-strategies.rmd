@@ -1,0 +1,217 @@
+---
+title: "買賣家出價實驗結果之影響因素分析"
+output:
+  html_document:
+    number_sections: no
+    theme: united
+    highlight: tango
+    toc: yes
+    toc_float:
+      collapsed: no
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,comment = '#>',error=TRUE, results = 'hold', out.width='65%', fig.align = 'center', message = FALSE)
+```
+此資料來源為台大經濟系助理教授陳儀 2019 所該開設的「實驗經濟學」之課堂實驗。實驗共有 50 回合，24 名參與者，參與者隨機分成三組，其中每組有 4 位賣家及 4 位買家。賣家在每回合開始時可以看到物品的真實價值(1~40 隨機給定)，並決定其出價；買家則決定其每回合的最高願付價格。
+
+當買家最高願付價格<賣家出價時，該回合不成交，雙方報酬皆為 0。相反的，買家最高願付價格>賣家出價時，該回合成交。每回合結束時，雙方皆會知道此回合成交與否與彼此報酬。
+
+- 成交時賣家報酬：賣家出價—1⁄2物品價值
+- 成交時買家報酬：物品價值—賣家出價
+
+```{r}
+# 讀取並整理資料
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+
+data <- read.csv("class_data.csv", stringsAsFactors = FALSE)
+
+buyer_id <- unique(filter(data, type == 1)$subject)
+seller_id <- unique(filter(data, type == 2)$subject)
+
+data$subject <- as.character(data$subject)
+
+buyer_data <- data %>% 
+  filter(data$subject %in% buyer_id)
+seller_data <- data %>% 
+  filter(data$subject %in% seller_id)
+```
+
+### 問題 1：買家的願付價格(share)受到什麼因素影響?
+#### 假設一：前回合的收入影響
+統計上不顯著 (p-value: 0.1098)
+```{r}
+### 買家前回合收入＆買家願付價格
+buyer_data <- buyer_data %>% 
+  arrange(subject) %>% 
+  mutate(previous_profit = 0)
+
+sub <- 0
+for (i in seq(nrow(buyer_data))){
+  if (sub == buyer_data$subject[i]){
+    buyer_data$previous_profit[i] <- buyer_data$profit[i-1]
+  } else{
+    sub <- buyer_data$subject[i]
+  }
+}
+
+buyer_pre_share_su <- buyer_data %>% 
+  group_by(period) %>% 
+  summarise(mean_previous_profit = mean(previous_profit), mean_share = mean(share)) 
+buyer_pre_share <- buyer_pre_share_su %>% 
+  gather(pro_share, value, mean_previous_profit, mean_share)
+
+buyer_profit_model <- lm(data = buyer_pre_share_su, mean_share ~ mean_previous_profit)
+summary(buyer_profit_model)
+
+ggplot(buyer_pre_share) +
+  geom_line(aes(x = period, y = value, color = pro_share)) +
+  labs(title = "各回合平均前回合及平均願付價格", x = "回合", y = "前回合收入/願付價格") +
+  theme_bw() +
+  theme(text=element_text(family = "黑體-繁 細體", size = 9)) +
+  scale_colour_discrete(name = "", breaks=c("mean_previous_profit", "mean_share"),
+                        labels=c("前回合收入", "願付價格")) 
+```
+#### 假設二：前一次交易失敗/成功
+統計上顯著 (p-value: < 2.2e-16)
+```{r}
+deal <- function(ID=buyer_id, buyer=1, accept=1){
+  list <- ""
+  id <- ""
+  for (i in ID) {
+    for (j in 1:50) { # period
+      row <- filter(data, period == j & subject == i) 
+      if (j != 50) {
+        next_period <- filter(data, period == j+1 & subject == i)
+        if (row$accept == accept) { # reject/ accept
+          if (buyer == 1){ # buyer
+            list <- append(list, next_period$share - row$share)
+            id <- append(id, i)
+          }else{ # seller
+            list <- append(list, (next_period$price-1/2*next_period$tv) - (row$price-1/2*row$tv))
+            id <- append(id, i)
+          }
+        }
+      }
+    }
+  }
+  list_df <- data.frame(id = id, change = list, stringsAsFactors = FALSE)
+  list_df <- list_df[-1,]
+  list_df$change <- as.numeric(list_df$change)
+  return(list_df)
+}
+##### 買家 前一回合交易失敗，這一回合願付價格的改變
+buyer_reject <- deal(buyer_id, 1, 0)
+ggplot() +
+  geom_boxplot(buyer_reject, mapping = aes(x = id, y = change)) +
+  geom_hline(aes(yintercept = mean(buyer_reject$change)), color = "blue", alpha = 0.5) +
+  geom_hline(aes(yintercept = 0), color = "red", alpha = 0.5) +
+  geom_text(aes(x = "9", y = 3.5, label = paste0("改變的平均\n",round(mean(buyer_reject$change),2)), family = "黑體-繁 細體"), size = 2.5, color = "blue") +
+  labs(title = "各買家在前一回合不成交的狀況下，這一回合願付價格的改變", x = "買家id", y = "這回合-前一回合願付價格")+
+  theme_bw() +
+  theme(text=element_text(family = "黑體-繁 細體", size = 9))
+
+##### 買家 前一回合交易成功，這一回合願付價格的改變
+buyer_accept <- deal(buyer_id, 1, 1)
+ggplot() +
+  geom_boxplot(buyer_accept, mapping = aes(x = id, y = change)) +
+  geom_hline(aes(yintercept = mean(buyer_accept$change)), color = "blue", alpha = 0.5) +
+  geom_hline(aes(yintercept = 0), color = "red", alpha = 0.5) +
+  geom_text(aes(x = "9", y = -10, label = "改變的平均\n-1.43", family = "黑體-繁 細體"), size = 2.5, color = "blue") +
+  labs(title = "各買家在前一回合成交的狀況下，這一回合願付價格的改變", x = "買家id", y = "這回合-前一回合願付價格")+
+  theme_bw() +
+  theme(text=element_text(family = "黑體-繁 細體", size = 9))
+##### 買家 前一回合交易失敗/成功，這一回合願付價格的改變
+buyer_change <- rbind(buyer_accept %>% mutate(accept = 1), buyer_reject %>% mutate(accept = 0))
+
+buyer_model <- lm(data = buyer_change, change ~ accept)
+summary(buyer_model)
+```
+
+
+### 問題 2：賣家的出價(price)受到什麼因素影響?
+
+#### 假設一：前一次交易失敗/成功
+統計上不顯著 p-value: 0.88
+
+```{r}
+##### 賣家 前一回合交易失敗，這一回合願付價格的改變
+seller_reject <- deal(seller_id, 0, 0)
+ggplot() +
+  geom_boxplot(seller_reject, mapping = aes(x = id, y = change)) +
+  geom_hline(aes(yintercept = mean(seller_reject$change)), color = "blue", alpha = 0.5) +
+  geom_hline(aes(yintercept = 0), color = "red", alpha = 0.5) +
+  geom_text(aes(x = "6", y = -5, label = paste0("改變的平均\n", round(mean(seller_reject$change),2)), family = "黑體-繁 細體"), size = 2.5, color = "blue") +
+  labs(title = "各賣家在前一回合不成交的狀況下，這一回合(出價-1/2物品價值)的改變", x = "賣家id", y = "這回合-前一回合利潤")+
+  theme_bw() +
+  theme(text=element_text(family = "黑體-繁 細體", size = 8))
+
+##### 賣家 前一回合交易成功，這一回合願付價格的改變
+seller_accept <- deal(seller_id, 0, 1)
+ggplot() +
+  geom_boxplot(seller_accept, mapping = aes(x = id, y = change)) +
+  geom_hline(aes(yintercept = mean(seller_accept$change)), color = "blue", alpha = 0.5) +
+  geom_hline(aes(yintercept = 0), color = "red", alpha = 0.5) +
+  geom_text(aes(x = "6", y = -8, label = "改變的平均\n-0.11", family = "黑體-繁 細體"), size = 2.5, color = "blue") +
+  labs(title = "各賣家在前一回合成交的狀況下，這一回合(出價-1/2物品價值)的改變", x = "賣家id", y = "這回合-前一回合利潤")+
+  theme_bw() +
+  theme(text=element_text(family = "黑體-繁 細體", size = 9))
+##### 賣家 前一回合交易失敗/成功，這一回合願付價格的改變
+seller_change <- rbind(seller_accept %>% mutate(accept = 1), seller_reject %>% mutate(accept = 0))
+
+seller_model <- lm(data = seller_change, change ~ accept)
+summary(seller_model)
+```
+
+#### 假設二：物品價值
+統計上顯著 p-value: < 2.2e-16
+
+```{r}
+# 物品質＆平均賣家出價
+seller_tv_p <- seller_data %>% 
+  group_by(tv) %>% 
+  summarise(mean_price = mean(price))
+
+tvLM <- lm(mean_price ~ tv, data = seller_tv_p)
+summary(tvLM)
+tri <- data.frame(x = c(0,0,40), y = c(0,40,40))
+
+ggplot(seller_tv_p) +
+  geom_point(aes(x = tv, y = mean_price)) +
+  theme_bw() +
+  geom_smooth(method = lm, aes(x = tv, y = mean_price)) +
+  ylim(0,40) +
+  theme(aspect.ratio=1) +
+  geom_abline(intercept = 0, slope = 1/2, color = "skyblue") +
+  geom_abline(intercept = 0, slope = 1, color = "salmon2") +
+  geom_polygon(mapping = aes(x=x, y=y), data=tri, alpha=0.1, fill="red")+
+  labs(x = "物品價值", y = "平均賣家出價") +
+  geom_text(aes(x = 10, y = 25, label = "買家利潤<0", family = "黑體-繁 細體"), size = 3, color = "salmon2") +
+  geom_text(aes(x = 28, y = 23, label = "買家利潤=0", family = "黑體-繁 細體"), size = 3, color = "salmon2") +
+  geom_text(aes(x = 37, y = 16, label = "賣家成本", family = "黑體-繁 細體"), size = 3, color = "skyblue") +
+  theme(text=element_text(family = "黑體-繁 細體", size = 9))
+```
+### 買家高報酬策略範例—16號玩家
+
+- 買家平均總利潤：28.6
+- 16號玩家總利潤：135
+
+推測16號玩家（買家）於一開始為了建立「買家不是好欺負的」名聲，讓賣家不敢隨意出價以剝削買家。舉例來說，若買家願付價格一直或是有很大的機率很高，賣家因為認為成交的機率很高，可能就不管物品價值的高低一律開出高價以剝削買家。
+
+35回合以後，16號玩家改變策略，最後的15回合願付價格皆為40（最高），此時他的各局報酬有正有負，但由於其餘大部分的買家願付價格都較低，賣家害怕無法成交平均來說不會將價格訂太高，16號玩家的平均報酬仍 > 0。
+```{r}
+# player_16
+player_16 <- buyer_data %>% 
+  filter(subject == "16") %>% 
+  select(period, share, profit) %>% 
+  gather(cat, value, share, profit)
+
+ggplot(player_16) +
+  geom_line(aes(x = period , y = value, color = cat)) +
+  labs(x = "回合", y = "報酬/最高願付價格", title = "16號玩家策略") +
+  theme_bw() +
+  theme(text=element_text(family = "黑體-繁 細體", size = 9)) +
+  scale_colour_discrete(name = "", breaks=c("profit", "share"),
+                        labels=c("當局報酬", "最高願付價格")) 
+```
